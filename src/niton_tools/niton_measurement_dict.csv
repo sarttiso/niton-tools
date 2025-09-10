@@ -1,0 +1,85 @@
+﻿niton column,quantity,type,unit
+Ag,Ag,mean,ppm
+Ag 2-Sigma,Ag,uncertainty,2s
+Al,Al,mean,ppm
+Al 2-Sigma,Al,uncertainty,2s
+As,As,mean,ppm
+As 2-Sigma,As,uncertainty,2s
+Au,Au,mean,ppm
+Au 2-Sigma,Au,uncertainty,2s
+Ba,Ba,mean,ppm
+Ba 2-Sigma,Ba,uncertainty,2s
+Bal,Bal,mean,ppm
+Bal 2-Sigma,Bal,uncertainty,2s
+Bi,Bi,mean,ppm
+Bi 2-Sigma,Bi,uncertainty,2s
+Ca,Ca,mean,ppm
+Ca 2-Sigma,Ca,uncertainty,2s
+Cd,Cd,mean,ppm
+Cd 2-Sigma,Cd,uncertainty,2s
+Cl,Cl,mean,ppm
+Cl 2-Sigma,Cl,uncertainty,2s
+Co,Co,mean,ppm
+Co 2-Sigma,Co,uncertainty,2s
+Cr,Cr,mean,ppm
+Cr 2-Sigma,Cr,uncertainty,2s
+Cu,Cu,mean,ppm
+Cu 2-Sigma,Cu,uncertainty,2s
+Fe,Fe,mean,ppm
+Fe 2-Sigma,Fe,uncertainty,2s
+Hf,Hf,mean,ppm
+Hf 2-Sigma,Hf,uncertainty,2s
+Hg,Hg,mean,ppm
+Hg 2-Sigma,Hg,uncertainty,2s
+K,K,mean,ppm
+K 2-Sigma,K,uncertainty,2s
+Mg,Mg,mean,ppm
+Mg 2-Sigma,Mg,uncertainty,2s
+Mn,Mn,mean,ppm
+Mn 2-Sigma,Mn,uncertainty,2s
+Mo,Mo,mean,ppm
+Mo 2-Sigma,Mo,uncertainty,2s
+Nb,Nb,mean,ppm
+Nb 2-Sigma,Nb,uncertainty,2s
+Ni,Ni,mean,ppm
+Ni 2-Sigma,Ni,uncertainty,2s
+P,P,mean,ppm
+P 2-Sigma,P,uncertainty,2s
+Pb,Pb,mean,ppm
+Pb 2-Sigma,Pb,uncertainty,2s
+Pd,Pd,mean,ppm
+Pd 2-Sigma,Pd,uncertainty,2s
+Rb,Rb,mean,ppm
+Rb 2-Sigma,Rb,uncertainty,2s
+Re,Re,mean,ppm
+Re 2-Sigma,Re,uncertainty,2s
+S,S,mean,ppm
+S 2-Sigma,S,uncertainty,2s
+Sb,Sb,mean,ppm
+Sb 2-Sigma,Sb,uncertainty,2s
+Se,Se,mean,ppm
+Se 2-Sigma,Se,uncertainty,2s
+Si,Si,mean,ppm
+Si 2-Sigma,Si,uncertainty,2s
+Sn,Sn,mean,ppm
+Sn 2-Sigma,Sn,uncertainty,2s
+Sr,Sr,mean,ppm
+Sr 2-Sigma,Sr,uncertainty,2s
+Ta,Ta,mean,ppm
+Ta 2-Sigma,Ta,uncertainty,2s
+Th,Th,mean,ppm
+Th 2-Sigma,Th,uncertainty,2s
+Ti,Ti,mean,ppm
+Ti 2-Sigma,Ti,uncertainty,2s
+U,U,mean,ppm
+U 2-Sigma,U,uncertainty,2s
+V,V,mean,ppm
+V 2-Sigma,V,uncertainty,2s
+W,W,mean,ppm
+W 2-Sigma,W,uncertainty,2s
+Y,Y,mean,ppm
+Y 2-Sigma,Y,uncertainty,2s
+Zn,Zn,mean,ppm
+Zn 2-Sigma,Zn,uncertainty,2s
+Zr,Zr,mean,ppm
+Zr 2-Sigma,Zr,uncertainty,2s
