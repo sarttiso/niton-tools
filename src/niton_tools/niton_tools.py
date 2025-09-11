@@ -103,7 +103,9 @@ def generate_dataframes(standard_file, sheet_name,
     #
     # process analyses
     #
-    df_analyses['analysis'] = df['Reading No'].astype(str)
+    # analysis is yyyy-mm-dd_reading-no
+    df_analyses['analysis'] = pd.to_datetime(df['Time']).dt.strftime('%Y-%m-%d') + '_' + df['Reading No'].astype(str)
+    # df_analyses['analysis'] = df['Reading No'].astype(str)  
     df_analyses['aliquot'] = df['Sample Depth'].map(aliquot_matches)
     df_analyses['sample'] = df_analyses['aliquot']  # assuming sample name is same as aliquot name
     df_analyses['date'] = pd.to_datetime(df['Time']).astype(str)
@@ -119,7 +121,7 @@ def generate_dataframes(standard_file, sheet_name,
     # iterate over analyses and quantities to populate measurements dataframe
     measurements_list = []
     for _, row in df.iterrows():
-        analysis = str(row['Reading No'])
+        analysis = pd.to_datetime(row['Time']).strftime('%Y-%m-%d') + '_' + str(row['Reading No'])
         for quantity in quantities:
             mean_col = quantity_column_map[quantity].get('mean')
             uncert_col = quantity_column_map[quantity].get('uncertainty')
@@ -385,20 +387,20 @@ class StandardUI:
             with self.match_output:
                 clear_output()
                 if len(aliquot_matches) == 0:
-                    print("No matching aliquots found in GeochemDB.")
+                    print("No matching standards found in GeochemDB.")
                     return
-                print("Aliquot Matches:")
+                print("Standard Matches:")
                 for orig, matched in aliquot_matches.items():
                     print(f"  {orig} -> {matched}")
                 # if aliquots didn't match, print those separately
                 unmatched = set(df['Sample Depth'].unique()) - set(aliquot_matches.keys())
                 if unmatched:
-                    print("\nUnmatched Aliquots:")
+                    print("\nUnmatched Standards:")
                     for orig in unmatched:
                         print(f"  {orig}")
                 # summarize matching; if all matched, say so
                 if len(unmatched) == 0:
-                    print("\nAll aliquots matched successfully.")
+                    print("\nAll standards matched successfully.")
                 
         except Exception as e:
             with self.match_output:
@@ -444,8 +446,9 @@ class StandardUI:
             return
         # search for analyses in database, and print positive and negative matches
         try:
+            analyses_str = pd.to_datetime(self.df['Time']).dt.strftime('%Y-%m-%d') + '_' + self.df['Reading No'].astype(str)
             analyses_in_db = self.geodb.matchrows_strings('Analyses', 
-                                                          self.df['Reading No'].astype(str).unique(), 
+                                                          analyses_str, 
                                                           'analysis', 
                                                           score_threshold=100)[1]
             with self.analysis_check_output:
@@ -457,7 +460,7 @@ class StandardUI:
                 for orig, matched in analyses_in_db.items():
                     print(f"{matched}")
                 # if analyses didn't match, print those separately
-                unmatched = set(self.df['Reading No'].astype(str).unique()) - set(analyses_in_db.keys())
+                unmatched = set(analyses_str) - set(analyses_in_db.keys())
                 if unmatched:
                     print("\nAnalyses Not Present in Database (can be added):")
                     for orig in unmatched:
