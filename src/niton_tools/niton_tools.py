@@ -9,6 +9,10 @@ from ipyfilechooser import FileChooser
 import ipywidgets as w
 from IPython.display import display, clear_output
 
+import panel as pn
+import matplotlib.pyplot as plt
+
+# options
 pd.set_option('future.no_silent_downcasting', True)
 
 # load niton_measurement_dict.csv from same directory as this file
@@ -596,3 +600,523 @@ class StandardUI:
             with self.update_measurements_output:
                 clear_output()
             print(f"Error updating measurements: {e}")
+
+
+class CalibrationEditorUI:
+    """UI to create, view, and save calibrations based on standard measurements.
+    """
+    def __init__(self):
+        #
+        # set up UI elements
+        #
+        
+        # part 1: file selection
+    
+        # database file selection widget (get path to standard database)
+        self.standard_db_chooser = FileChooser(start_path='.',  # start in the notebook’s cwd
+                                               title='<b>Select standard_database.db</b>',
+                                               filter_pattern='standard_database.db',   
+                                               show_hidden=False)
+
+        # assign callback function to load and validate the selected database file
+        self.standard_db_chooser.register_callback(self.on_standard_db_file_selected)
+
+        # select standard definition file
+        self.standard_def_chooser = FileChooser(start_path='.',  # start in the notebook’s cwd
+                                               title='<b>Select standard_definitions.xlsx</b>',
+                                               filter_pattern='standard_definitions.xlsx',
+                                               show_hidden=False)
+        # assign callback function to load and validate the selected standard definitions file
+        self.standard_def_chooser.register_callback(self.on_standard_def_file_selected)
+
+        # assemble file selection widgets
+        self.file_chooser_box = w.HBox([self.standard_db_chooser, self.standard_def_chooser],
+                                       layout=w.Layout(padding='5px'))
+        self.file_chooser_box_container = w.VBox([w.HTML("<b>1. Select Files</b>"),
+                                                  self.file_chooser_box],
+                                       layout=w.Layout(margin='10px 0px 10px 0px', 
+                                                       border='2px solid gray', 
+                                                       padding='5px'))
+
+        # part 2: options for filtering standard measurements to include in calibration
+
+        # date range selection                                         
+        self.start_date_picker = w.DatePicker(description='Start Date:')
+        self.start_date_picker.observe(self.filter_standards, names='value')
+        self.end_date_picker = w.DatePicker(description='End Date:')
+        self.end_date_picker.observe(self.filter_standards, names='value')
+
+        self.date_box = w.VBox([w.HTML('Select Date Range:'),
+                                self.start_date_picker, 
+                                self.end_date_picker],
+                               layout=w.Layout(padding='5px'))
+        # create widget for dynamically defined standard checkboxes
+        self.standard_box = w.VBox(layout=w.Layout(border='1px solid gray',
+                                                  padding='2px',
+                                                  width='200px',
+                                                  overflow='visible'))  # initially empty
+        self.standard_box_container = w.VBox([w.HTML('Select Standards to Include:'),
+                                              self.standard_box],
+                                              layout=w.Layout(padding='5px'))
+        
+        # create widget for dynamically defined reading type checkboxes
+        self.reading_type_box = w.VBox(layout=w.Layout(border='1px solid gray',
+                                                      padding='2px',
+                                                      width='200px',
+                                                      overflow='visible'))  # initially empty
+        self.reading_type_box_container = w.VBox([w.HTML('Select Reading Types to Include:'),
+                                                  self.reading_type_box],
+                                                  layout=w.Layout(padding='5px'))
+        
+        # outlier filtering options
+        self.outlier_method_dropdown = w.Dropdown(options=['None', 
+                                                           'IQR', 
+                                                           'Z-Score', 
+                                                           'MAD'],
+                                                  value='IQR',
+                                                  description='Outlier Method:',
+                                                  style={'description_width': '130px'},
+                                                  layout=w.Layout(width='200px'))
+        self.outlier_method_dropdown.observe(self.filter_standards, names='value')
+        self.outlier_threshold_float = w.BoundedFloatText(value=1.5, 
+                                                          min=0, 
+                                                          max=10,
+                                                          step=0.1,
+                                                          description='Outlier Threshold:',
+                                                          style={'description_width': '130px'},
+                                                        layout=w.Layout(width='200px'))
+        self.outlier_threshold_float.observe(self.filter_standards, names='value')
+        self.outlier_box = w.VBox([w.HTML('Outlier Filtering Options:'),
+                                   self.outlier_method_dropdown,
+                                   self.outlier_threshold_float],
+                                  layout=w.Layout(padding='5px'))
+
+        # create output to provide summary information for each selected standard based on filter values
+        self.filter_summary_output = w.Output(layout=w.Layout(border='1px solid gray'))
+        self.filter_summary_output_container = w.VBox([w.HTML('Filter Summary:'),
+                                                      self.filter_summary_output],
+                                                      layout=w.Layout(padding='5px'))
+        # assemble filter options
+        self.filter_box = w.HBox([w.VBox([self.date_box, 
+                                          self.reading_type_box_container,
+                                          self.outlier_box]), 
+                                  self.standard_box_container,
+                                  self.filter_summary_output_container],)
+        self.filter_box_container = w.VBox([w.HTML("<b>2. Filter Standards for Calibration</b>"),
+                                           self.filter_box],
+                                           layout=w.Layout(margin='10px 0px 10px 0px', 
+                                                           border='2px solid gray', 
+                                                           padding='5px'))
+
+        # part 3: element selection
+
+        # widget to hold elements to include in plot
+        self.element_box = w.VBox(layout=w.Layout(border='1px solid gray',
+                                                    padding='2px',
+                                                    width='200px',
+                                                    overflow='visible'))  # initially empty
+        self.element_box_container = w.VBox([w.HTML('Select Elements to Plot:'),
+                                            self.element_box],
+                                            layout=w.Layout(padding='5px'))
+        
+        # set up output to hold plots for selected elements and standard measurements
+        self.plotting_output = w.Output()
+
+        # container for element selection and plots
+        self.plotting_container = w.VBox([w.HTML("<b>3. Plotting</b>"),
+                                         w.HBox([self.element_box_container,
+                                                 self.plotting_output])],
+                                         layout=w.Layout(margin='10px 0px 10px 0px', 
+                                                         border='2px solid gray', 
+                                                         padding='5px'))
+
+
+        # assemble UI
+        self.ui = w.VBox([
+                    # database selection
+                    self.file_chooser_box_container,
+                    # filter options
+                    self.filter_box_container,
+                    # element selection
+                    self.plotting_container
+                ])
+        display(self.ui)
+
+    def on_standard_db_file_selected(self, change):
+        """Callback for when a standard database file is selected.
+
+        Attempts to create a GeochemDB object with database connection to validate the file.
+
+        Parameters
+        ----------
+        change : dict
+            Dictionary containing information about the change.
+        """
+        if not self.standard_db_chooser.selected:
+            print("No file selected.")
+            return
+        # path to selected file
+        file_path = Path(self.standard_db_chooser.selected)
+        if not file_path.exists():
+            print(f"File {file_path} does not exist.")
+            return
+        try:
+            # try to connect to the database to validate it
+            self.geodb = geochemdb.GeochemDB(file_path)
+            # generate standard checkboxes
+            self.generate_standard_checkboxes()
+            # generate reading type checkboxes
+            self.generate_readingtype_checkboxes()
+            # set default date range
+            self.set_default_date_range()
+            # set element checkboxes
+            self.set_element_checkboxes()
+            print(f"Connected to GeochemDB at {file_path}.")
+        except Exception as e:
+            print(f"Error connecting to GeochemDB: {e}")
+
+    def on_standard_def_file_selected(self, change):
+        """Callback for when a standard definitions file is selected.
+
+        Attempts to load the standard definitions to validate the file.
+
+        Parameters
+        ----------
+        change : dict
+            Dictionary containing information about the change.
+        """
+        if not self.standard_def_chooser.selected:
+            print("No file selected.")
+            return
+        # path to selected file
+        file_path = Path(self.standard_def_chooser.selected)
+        if not file_path.exists():
+            print(f"File {file_path} does not exist.")
+            return
+        try:
+            # try to load the standard definitions to validate the file
+            self.stand_def_df = pd.read_excel(file_path, sheet_name='standards')
+            # verify that required columns are present by comparing with niton_measurement_dict
+            if not list(self.stand_def_df.columns) >= list(meas_dict_df['niton column']):
+                # list missing columns
+                missing_cols = set(meas_dict_df['niton column']) - set(self.stand_def_df.columns)
+                print(f"Error: Missing required columns in {file_path}: {missing_cols}.")
+                return
+
+            print(f"Loaded standard definitions from {file_path}.")
+        except Exception as e:
+            print(f"Error loading standard definitions: {e}")
+
+    def generate_standard_checkboxes(self):
+        """Generate checkboxes for selecting standards to include in calibration.
+        """
+        if not hasattr(self, 'geodb'):
+            print("Please select the standard database file.")
+            return
+        try:
+            self.standard_names = self.geodb.get_aliquots()
+            self.standard_checkboxes = [w.Checkbox(value=False, 
+                                                   indent=False,
+                                                   description=name,
+                                                   layout=w.Layout(width='100%',
+                                                                   height='20px',
+                                                                   margin='0px',
+                                                                   padding='0px')) for name in self.standard_names]
+            
+            self.standard_box.children = self.standard_checkboxes
+            # set height with buffer, max height 500px
+            height_px = min(500, 20 * len(self.standard_checkboxes) + 10) 
+            self.standard_box.layout.height = f'{height_px}px'
+            # assign callback to filter standard measurements
+            for cb in self.standard_checkboxes:
+                cb.observe(self.filter_standards, names='value')
+
+        except Exception as e:
+            print(f"Error loading standards: {e}")
+
+    def generate_readingtype_checkboxes(self):
+        """Generate checkboxes for selecting reading types to include in calibration.
+        """
+        if not hasattr(self, 'geodb'):
+            print("Please select the standard database file.")
+            return
+        try:
+            self.reading_types = pd.read_sql_query('select * from Techniques', self.geodb.con)['name'].tolist()
+            self.reading_type_checkboxes = [w.Checkbox(value=False, 
+                                                       indent=False,
+                                                       description=rt,
+                                                       layout=w.Layout(width='100%',
+                                                                       height='20px',
+                                                                       margin='0px',padding='0px')) for rt in self.reading_types]
+            self.reading_type_box.children = self.reading_type_checkboxes
+            # set height with buffer, max height 500px
+            height_px = min(500, 20 * len(self.reading_type_checkboxes) + 10) 
+            self.reading_type_box.layout.height = f'{height_px}px'
+            # assign callback to filter standard measurements
+            for cb in self.reading_type_checkboxes:
+                cb.observe(self.filter_standards, names='value')
+        except Exception as e:
+            print(f"Error loading reading types: {e}")
+
+    def set_default_date_range(self):
+        """Set default date range based on range of dates in self.geodb.
+
+        """
+        if not hasattr(self, 'geodb'):
+            print("Please select the standard database file.")
+            return
+        try:
+            df_analyses = pd.read_sql_query('select * from Analyses', self.geodb.con)
+            df_analyses['date'] = pd.to_datetime(df_analyses['date'], errors='coerce')
+            min_date = df_analyses['date'].min()
+            max_date = df_analyses['date'].max()
+            if pd.isna(min_date) or pd.isna(max_date):
+                print("No valid dates found in date column.")
+                return
+            self.start_date_picker.value = min_date.date()
+            self.end_date_picker.value = max_date.date()
+            # assign callback to filter standard measurements
+            self.start_date_picker.observe(self.filter_standards, names='value')
+            self.end_date_picker.observe(self.filter_standards, names='value')
+        except Exception as e:
+            print(f"Error setting default date range: {e}")
+
+    def set_element_checkboxes(self):
+        """Set checkboxes for selecting elements to include in calibration.
+
+        Use Quantities table to get list of elements.
+        """
+        if not hasattr(self, 'geodb'):
+            print("Please select the standard database file.")
+            return
+        try:
+            self.elements = pd.read_sql_query('select * from Quantities', self.geodb.con)['name'].tolist()
+            self.element_checkboxes = [w.Checkbox(value=False, 
+                                                  indent=False,
+                                                  description=el,
+                                                  layout=w.Layout(width='100%',
+                                                                  height='20px',
+                                                                  margin='0px',
+                                                                  padding='0px')) for el in self.elements]
+            self.element_box.children = self.element_checkboxes
+
+            # assign callback to update plots when elements are selected
+            for cb in self.element_checkboxes:
+                cb.observe(self.plot_filtered_standards, names='value')
+        except Exception as e:
+            print(f"Error loading elements: {e}")
+
+    def filter_standards(self, change):
+        """Callback to filter standards based on selected criteria.
+
+        Criteria include date range, standards to use, and reading types.
+
+        All output is sent to self.filter_summary_output.
+
+        Parameters
+        ----------
+        change : dict
+            Dictionary containing information about the change.
+        """
+        if not hasattr(self, 'geodb'):
+            with self.filter_summary_output:
+                clear_output()
+                print("Please select the standard database file.")
+            return
+        try:
+            # get selected date range
+            start_date = self.start_date_picker.value
+            end_date = self.end_date_picker.value
+            if start_date is None or end_date is None:
+                with self.filter_summary_output:
+                    clear_output()
+                    print("Please select a valid start and end date.")
+                return
+            if start_date > end_date:
+                with self.filter_summary_output:
+                    clear_output()
+                    print("Start date must be before end date.")
+                return
+            # get list of selected standards
+            selected_standards = [cb.description for cb in self.standard_checkboxes if cb.value]
+            if len(selected_standards) == 0:
+                with self.filter_summary_output:
+                    clear_output()
+                    print("Please select at least one standard.")
+                return
+            # get list of selected reading types
+            selected_reading_types = [cb.description for cb in self.reading_type_checkboxes if cb.value]
+            if len(selected_reading_types) == 0:
+                with self.filter_summary_output:
+                    clear_output()
+                    print("Please select at least one reading type.")
+                return
+            # query database to get filtered standard measurements
+            query = f"""
+                SELECT m.*, a.date, a.analysis, al.aliquot, t.name as technique
+                FROM Measurements m
+                JOIN Analyses a ON m.analysis = a.analysis
+                JOIN Aliquots al ON a.aliquot = al.aliquot
+                JOIN Techniques t ON a.technique = t.name
+                WHERE a.date BETWEEN '{start_date}' AND '{end_date}'
+                  AND al.aliquot IN ({','.join(['?']*len(selected_standards))})
+                  AND t.name IN ({','.join(['?']*len(selected_reading_types))})
+                """
+            params = selected_standards + selected_reading_types
+            self.filtered_measurements = pd.read_sql_query(query, self.geodb.con, params=params)
+            # drop rows with NaN or 0 in "mean" column
+            self.filtered_measurements = self.filtered_measurements.dropna(subset=['mean'])
+            self.filtered_measurements = self.filtered_measurements[self.filtered_measurements['mean'] != 0]
+            # apply outlier filtering if selected
+            method = self.outlier_method_dropdown.value
+            threshold = self.outlier_threshold_float.value
+            self.filtered_measurements = self.filter_outliers(self.filtered_measurements, 
+                                                         method=method,
+                                                         threshold=threshold)
+            # display summary information
+            with self.filter_summary_output:
+                clear_output()
+                if self.filtered_measurements.empty:
+                    print("No measurements found for the selected criteria.")
+                    return
+                # group by aliquot and element (multiindex) to summarize number of measurements per element (one columns)
+                summary = self.filtered_measurements.groupby(['aliquot', 'quantity']).size().unstack(fill_value=0).T
+                print("Filtered Measurements Summary (number of measurements per element):")
+                display(summary)
+        except Exception as e:
+            print(f"Error filtering standards: {e}")
+
+    def filter_outliers(self, df, method='IQR', threshold=None):
+        """Filter outliers from a dataframe of measurements.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            DataFrame containing measurements with columns 'aliquot', 'quantity', and 'mean'.
+        method : str, optional
+            One of 'IQR', 'Z-Score', 'MAD', or 'None', by default 'IQR'
+        threshold : float, optional
+            Threshold to use, by default None. If None, then a method-specific threshold is used:
+                - 1.5 for IQR
+                - 3 for Z-Score
+                - 3.5 for MAD
+        """
+        if method == 'None':
+            return df
+        filtered_dfs = []
+        for (aliquot, quantity), group in df.groupby(['aliquot', 'quantity']):
+            if method == 'IQR':
+                if threshold is None:
+                    threshold = 1.5
+                Q1 = group['mean'].quantile(0.25)
+                Q3 = group['mean'].quantile(0.75)
+                IQR = Q3 - Q1
+                lower_bound = Q1 - threshold * IQR
+                upper_bound = Q3 + threshold * IQR
+                filtered_group = group[(group['mean'] >= lower_bound) & (group['mean'] <= upper_bound)]
+            elif method == 'Z-Score':
+                if threshold is None:
+                    threshold = 3
+                mean = group['mean'].mean()
+                std = group['mean'].std()
+                z_scores = (group['mean'] - mean) / std
+                filtered_group = group[abs(z_scores) <= threshold]
+            elif method == 'MAD':
+                if threshold is None:
+                    threshold = 3.5
+                median = group['mean'].median()
+                mad = np.median(np.abs(group['mean'] - median))
+                modified_z_scores = 0.6745 * (group['mean'] - median) / mad
+                filtered_group = group[abs(modified_z_scores) <= threshold]
+            else:
+                raise ValueError(f"Unknown outlier filtering method: {method}")
+            filtered_dfs.append(filtered_group)
+        if filtered_dfs:
+            return pd.concat(filtered_dfs)
+        else:
+            return pd.DataFrame(columns=df.columns)
+
+    def plot_filtered_standards(self, change):
+        """Callback for when an element checkbox is changed.
+
+        Updates the plots to show selected elements.
+
+        Parameters
+        ----------
+        change : dict
+            Dictionary containing information about the change.
+        """
+        # make sure standards have been filtered
+        if not hasattr(self, 'filtered_measurements'):
+            with self.filter_summary_output:
+                clear_output()
+                print("Please filter standards first.")
+            return
+        # if no measurements after filtering, inform user
+        if self.filtered_measurements.empty:
+            with self.filter_summary_output:
+                clear_output()
+                print("No measurements found for the selected criteria.")
+            return
+        # get list of selected elements
+        elements = [cb.description for cb in self.element_checkboxes if cb.value]
+        if len(elements) == 0:
+            with self.filter_summary_output:
+                clear_output()
+                print("Please select at least one element to plot.")
+            return
+        try:
+            selected_standards = [cb.description for cb in self.standard_checkboxes if cb.value]
+            num_elements = len(elements)
+            fig, ax = plt.subplots(num_elements, 1, figsize=(5, 5*num_elements))
+            ax = np.atleast_1d(ax)  # ensure ax is always an array even if num_elements=1
+            # create subplots for each selected element
+            for ii, el in enumerate(elements):
+                el_df = self.filtered_measurements[self.filtered_measurements['quantity'] == el]
+                if el_df.empty:
+                    ax[ii].text(0.5, 0.5, f'No measurements for {el}', 
+                            horizontalalignment='center', 
+                            verticalalignment='center', 
+                            transform=ax.transAxes)
+                    continue
+                el_by_samp = el_df.groupby('aliquot')['mean'].agg(list)
+                # set up violins
+                positions =np.array([self.stand_def_df.loc[self.stand_def_df['Sample'] == sample][el].values[0] for sample in el_by_samp.index])
+                width = 0.05 * np.max(positions)
+                parts = ax[ii].violinplot(el_by_samp, 
+                                positions=positions,
+                                widths=width,
+                                orientation='horizontal',
+                                showmeans=False,
+                                showmedians=False,
+                                showextrema=False)
+                for pc in parts['bodies']:
+                    pc.set_alpha(0.6)
+                # show box, whiskers
+                quantiles = el_df.groupby('aliquot')['mean'].quantile([0.25, 0.75]).unstack(level=1).values
+                el_min, el_max = el_df.groupby('aliquot')['mean'].min(), el_df.groupby('aliquot')['mean'].max()
+                ax[ii].hlines(positions, el_min, el_max, color='k', lw=0.5)
+                ax[ii].hlines(positions, quantiles[:, 0], quantiles[:, 1], color='k', lw=2, label='25-75%')
+                # plot standard uncertainty bars at median value of standard measurements
+                medians = el_df.groupby('aliquot')['mean'].median()
+                stand_unc = np.array([self.stand_def_df.loc[self.stand_def_df['Sample'] == sample][f'{el} 2-Sigma'].values[0] for sample in el_by_samp.index])
+                ax[ii].vlines(medians, positions-stand_unc, positions+stand_unc, color='orange', lw=2, label='Standard uncertainty')
+                # label rightmost extents of whiskers with standard names
+                for samp, pos, el_max_val in zip(el_by_samp.index, positions, el_max):
+                    ax[ii].text(el_max_val, pos, samp, verticalalignment='center', fontsize=8)
+                # 1:1 line
+                ax[ii].axline((0, 0), slope=1, color='k', linestyle='--')
+
+                ax[ii].set_title(f'{el}')
+                ax[ii].set_ylabel('Known concentration (ppm)')
+
+            ax[-1].set_xlabel('Measured concentration (ppm)')
+            ax[0].legend()
+                
+            # display the plots in the output widget
+            with self.plotting_output:
+                self.plotting_output.clear_output(wait=True)
+                display(fig)
+                plt.close(fig)  # close the figure to prevent duplicate display in some environments
+        except Exception as e:
+            print(f"Error updating plots: {e}")
