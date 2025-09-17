@@ -10,3 +10,9 @@ The package provides the following functionality:
     - Ability to correct concentrations for unknowns according to element-specific calibration lines constrained by known standard measurements
     - Assumes standard measurements are stored in `GeochemDB`-compatible SQLite database
     - Assumes standard compositions are defined
+
+## Installation
+
+```bash
+pip install niton-tools
+```
