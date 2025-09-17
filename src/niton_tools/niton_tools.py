@@ -7,9 +7,10 @@ from typing import Union
 
 from ipyfilechooser import FileChooser
 import ipywidgets as w
-from IPython.display import display, clear_output
+from IPython.display import display, clear_output, HTML
 
-import panel as pn
+from scipy.optimize import curve_fit
+
 import matplotlib.pyplot as plt
 
 # options
@@ -675,21 +676,37 @@ class CalibrationEditorUI:
                                                            'MAD'],
                                                   value='IQR',
                                                   description='Outlier Method:',
-                                                  style={'description_width': '130px'},
-                                                  layout=w.Layout(width='200px'))
+                                                  style={'description_width': '200px'})
         self.outlier_method_dropdown.observe(self.filter_standards, names='value')
         self.outlier_threshold_float = w.BoundedFloatText(value=1.5, 
                                                           min=0, 
                                                           max=10,
                                                           step=0.1,
                                                           description='Outlier Threshold:',
-                                                          style={'description_width': '130px'},
-                                                        layout=w.Layout(width='200px'))
+                                                          style={'description_width': '200px'},)
         self.outlier_threshold_float.observe(self.filter_standards, names='value')
         self.outlier_box = w.VBox([w.HTML('Outlier Filtering Options:'),
                                    self.outlier_method_dropdown,
                                    self.outlier_threshold_float],
                                   layout=w.Layout(padding='5px'))
+        
+        # minimum number of measurements per standard
+        self.min_measurements_int = w.BoundedIntText(value=10,
+                                                     min=1,
+                                                     max=500,
+                                                     step=1,
+                                                     description='Min Measurements per Standard:',
+                                                     style={'description_width': '200px'})
+        self.min_measurements_int.observe(self.filter_standards, names='value')
+        
+        # minimum number of standards per element
+        self.min_standards_int = w.BoundedIntText(value=4,
+                                                  min=1,
+                                                  max=10,
+                                                  step=1,
+                                                  description='Min Standards per Element:',
+                                                  style={'description_width': '200px'})
+        self.min_standards_int.observe(self.filter_standards, names='value')
 
         # create output to provide summary information for each selected standard based on filter values
         self.filter_summary_output = w.Output(layout=w.Layout(border='1px solid gray'))
@@ -699,16 +716,18 @@ class CalibrationEditorUI:
         # assemble filter options
         self.filter_box = w.HBox([w.VBox([self.date_box, 
                                           self.reading_type_box_container,
-                                          self.outlier_box]), 
+                                          self.outlier_box,
+                                          self.min_measurements_int,
+                                          self.min_standards_int],), 
                                   self.standard_box_container,
-                                  self.filter_summary_output_container],)
+                                  self.filter_summary_output_container])
         self.filter_box_container = w.VBox([w.HTML("<b>2. Filter Standards for Calibration</b>"),
                                            self.filter_box],
                                            layout=w.Layout(margin='10px 0px 10px 0px', 
                                                            border='2px solid gray', 
                                                            padding='5px'))
 
-        # part 3: element selection
+        # part 3: element selection, plotting, calibration
 
         # widget to hold elements to include in plot
         self.element_box = w.VBox(layout=w.Layout(border='1px solid gray',
@@ -721,6 +740,9 @@ class CalibrationEditorUI:
         
         # set up output to hold plots for selected elements and standard measurements
         self.plotting_output = w.Output()
+
+        # output to show calibration summary
+        self.calibration_output = w.Output()
 
         # container for element selection and plots
         self.plotting_container = w.VBox([w.HTML("<b>3. Plotting</b>"),
@@ -769,8 +791,7 @@ class CalibrationEditorUI:
             self.generate_readingtype_checkboxes()
             # set default date range
             self.set_default_date_range()
-            # set element checkboxes
-            self.set_element_checkboxes()
+
             print(f"Connected to GeochemDB at {file_path}.")
         except Exception as e:
             print(f"Error connecting to GeochemDB: {e}")
@@ -795,7 +816,9 @@ class CalibrationEditorUI:
             return
         try:
             # try to load the standard definitions to validate the file
-            self.stand_def_df = pd.read_excel(file_path, sheet_name='standards')
+            self.stand_def_df = pd.read_excel(file_path, 
+                                              sheet_name='standards',
+                                              index_col=0)
             # verify that required columns are present by comparing with niton_measurement_dict
             if not list(self.stand_def_df.columns) >= list(meas_dict_df['niton column']):
                 # list missing columns
@@ -884,14 +907,18 @@ class CalibrationEditorUI:
     def set_element_checkboxes(self):
         """Set checkboxes for selecting elements to include in calibration.
 
-        Use Quantities table to get list of elements.
+        Use elements in self.standard_element_df (i.e., after running filter_standards and process_filtered_standards).
         """
-        if not hasattr(self, 'geodb'):
-            print("Please select the standard database file.")
+        # check that self.standard_element_df exists
+        if not hasattr(self, 'standard_element_df'):
+            print("Please filter standards first.")
             return
+        
         try:
-            self.elements = pd.read_sql_query('select * from Quantities', self.geodb.con)['name'].tolist()
-            self.element_checkboxes = [w.Checkbox(value=False, 
+            # elements present in filtered and processed measurements
+            self.elements = self.standard_element_df.index.get_level_values('element').unique().tolist()
+            self.elements.sort()
+            self.element_checkboxes = [w.Checkbox(value=False,
                                                   indent=False,
                                                   description=el,
                                                   layout=w.Layout(width='100%',
@@ -939,10 +966,11 @@ class CalibrationEditorUI:
                 return
             # get list of selected standards
             selected_standards = [cb.description for cb in self.standard_checkboxes if cb.value]
-            if len(selected_standards) == 0:
+            # ensure at least as many standards are selected as min_standards_int.value
+            if len(selected_standards) < self.min_standards_int.value:
                 with self.filter_summary_output:
                     clear_output()
-                    print("Please select at least one standard.")
+                    print(f"Please select at least {self.min_standards_int.value} standards.")
                 return
             # get list of selected reading types
             selected_reading_types = [cb.description for cb in self.reading_type_checkboxes if cb.value]
@@ -973,6 +1001,12 @@ class CalibrationEditorUI:
             self.filtered_measurements = self.filter_outliers(self.filtered_measurements, 
                                                          method=method,
                                                          threshold=threshold)
+            # process filtered standards
+            self.process_filtered_standards()
+
+            # create element selection checkboxes based on elements present in filtered and processed measurements
+            self.set_element_checkboxes()
+
             # display summary information
             with self.filter_summary_output:
                 clear_output()
@@ -981,8 +1015,19 @@ class CalibrationEditorUI:
                     return
                 # group by aliquot and element (multiindex) to summarize number of measurements per element (one columns)
                 summary = self.filtered_measurements.groupby(['aliquot', 'quantity']).size().unstack(fill_value=0).T
-                print("Filtered Measurements Summary (number of measurements per element):")
-                display(summary)
+                # show cells with fewer than min_measurements_int.value measurements in red
+                # also highlight rows with fewer than min_standards_int.value standards in red
+                summary_styled = summary.style.map(lambda x: 'color: red' if x < self.min_measurements_int.value else 'color: black')\
+                .apply(lambda r: [
+                    # If the row meets the condition → colour the whole row,
+                    # otherwise leave the cell unchanged (empty string).
+                    'background-color: lightcoral' 
+                    if (len(selected_standards) - (r < self.min_measurements_int.value).sum()) < self.min_standards_int.value else ''
+                    for _ in r   # repeat the same style for every column in this row
+                ],
+                axis=1        # tell pandas “apply this function to each row”
+                )
+                display(summary_styled)
         except Exception as e:
             print(f"Error filtering standards: {e}")
 
@@ -1035,6 +1080,32 @@ class CalibrationEditorUI:
             return pd.concat(filtered_dfs)
         else:
             return pd.DataFrame(columns=df.columns)
+        
+    def process_filtered_standards(self):
+        """Process the filtered standard measurements to compute summary statistics.
+        """
+        if not hasattr(self, 'filtered_measurements'):
+            print("Please filter standards first.")
+            return
+        # aggregate measurements ("mean") by element and aliquot as lists and percentiles, set aliquot and quantities (as 'standard', 'element') as MultiIndex
+        agg_funcs = {
+            'mean_list': ('mean', list),
+            'n': ('mean', 'count'),
+            'sig': ('mean', 'std'),
+            'max': ('mean', 'max'),
+            'min': ('mean', 'min'),
+        }
+        percentiles = [2.5, 25, 50, 75, 97.5]
+        for p in percentiles:
+            agg_funcs[f'{p}'] = ('mean', lambda x, q=p: np.percentile(x, q))
+        self.standard_element_df = self.filtered_measurements.groupby(['aliquot', 'quantity']).agg(**agg_funcs).reset_index()
+        self.standard_element_df.rename(columns={'aliquot': 'standard', 'quantity': 'element'}, inplace=True)
+        self.standard_element_df.set_index(['standard', 'element'], inplace=True)
+        # filter out standards with fewer than min_measurements_int.value measurements
+        self.standard_element_df = self.standard_element_df[self.standard_element_df['n'] >= self.min_measurements_int.value]
+        # filter out elements with fewer than min_standards_int.value standards; also drop from the multiindex
+        self.standard_element_df = self.standard_element_df.groupby('element').filter(lambda x: len(x) >= self.min_standards_int.value)
+        self.standard_element_df.index = self.standard_element_df.index.remove_unused_levels()
 
     def plot_filtered_standards(self, change):
         """Callback for when an element checkbox is changed.
@@ -1046,22 +1117,33 @@ class CalibrationEditorUI:
         change : dict
             Dictionary containing information about the change.
         """
+        # ensure database and standard definitions have been loaded
+        if not hasattr(self, 'geodb'):
+            with self.plotting_output:
+                clear_output()
+                print("Please select the standard database file.")
+            return
+        if not hasattr(self, 'stand_def_df'):
+            with self.plotting_output:
+                clear_output()
+                print("Please select the standard definitions file.")
+            return
         # make sure standards have been filtered
         if not hasattr(self, 'filtered_measurements'):
-            with self.filter_summary_output:
+            with self.plotting_output:
                 clear_output()
                 print("Please filter standards first.")
             return
         # if no measurements after filtering, inform user
         if self.filtered_measurements.empty:
-            with self.filter_summary_output:
+            with self.plotting_output:
                 clear_output()
                 print("No measurements found for the selected criteria.")
             return
         # get list of selected elements
         elements = [cb.description for cb in self.element_checkboxes if cb.value]
         if len(elements) == 0:
-            with self.filter_summary_output:
+            with self.plotting_output:
                 clear_output()
                 print("Please select at least one element to plot.")
             return
@@ -1072,18 +1154,10 @@ class CalibrationEditorUI:
             ax = np.atleast_1d(ax)  # ensure ax is always an array even if num_elements=1
             # create subplots for each selected element
             for ii, el in enumerate(elements):
-                el_df = self.filtered_measurements[self.filtered_measurements['quantity'] == el]
-                if el_df.empty:
-                    ax[ii].text(0.5, 0.5, f'No measurements for {el}', 
-                            horizontalalignment='center', 
-                            verticalalignment='center', 
-                            transform=ax.transAxes)
-                    continue
-                el_by_samp = el_df.groupby('aliquot')['mean'].agg(list)
                 # set up violins
-                positions =np.array([self.stand_def_df.loc[self.stand_def_df['Sample'] == sample][el].values[0] for sample in el_by_samp.index])
+                positions = self.stand_def_df.loc[self.standard_element_df.xs(el, level=1).index][el].values
                 width = 0.05 * np.max(positions)
-                parts = ax[ii].violinplot(el_by_samp, 
+                parts = ax[ii].violinplot(self.standard_element_df.xs(el, level=1)['mean_list'].values,
                                 positions=positions,
                                 widths=width,
                                 orientation='horizontal',
@@ -1093,16 +1167,22 @@ class CalibrationEditorUI:
                 for pc in parts['bodies']:
                     pc.set_alpha(0.6)
                 # show box, whiskers
-                quantiles = el_df.groupby('aliquot')['mean'].quantile([0.25, 0.75]).unstack(level=1).values
-                el_min, el_max = el_df.groupby('aliquot')['mean'].min(), el_df.groupby('aliquot')['mean'].max()
-                ax[ii].hlines(positions, el_min, el_max, color='k', lw=0.5)
-                ax[ii].hlines(positions, quantiles[:, 0], quantiles[:, 1], color='k', lw=2, label='25-75%')
+                ax[ii].hlines(positions, 
+                              self.standard_element_df.xs(el, level=1)['2.5'].values, 
+                              self.standard_element_df.xs(el, level=1)['97.5'].values,
+                              color='k', lw=0.5, label='2.5-97.5%')
+                ax[ii].hlines(positions, 
+                              self.standard_element_df.xs(el, level=1)['25'].values, 
+                              self.standard_element_df.xs(el, level=1)['75'].values, 
+                              color='k', lw=2, label='25-75%')
                 # plot standard uncertainty bars at median value of standard measurements
-                medians = el_df.groupby('aliquot')['mean'].median()
-                stand_unc = np.array([self.stand_def_df.loc[self.stand_def_df['Sample'] == sample][f'{el} 2-Sigma'].values[0] for sample in el_by_samp.index])
+                medians = self.standard_element_df.xs(el, level=1)['50'].values
+                stand_unc = self.stand_def_df.loc[self.standard_element_df.xs(el, level=1).index][f'{el} 2-Sigma'].values
                 ax[ii].vlines(medians, positions-stand_unc, positions+stand_unc, color='orange', lw=2, label='Standard uncertainty')
                 # label rightmost extents of whiskers with standard names
-                for samp, pos, el_max_val in zip(el_by_samp.index, positions, el_max):
+                for samp, pos, el_max_val in zip(self.standard_element_df.xs(el, level=1).index,
+                                                positions, 
+                                                self.standard_element_df.xs(el, level=1)['max'].values):
                     ax[ii].text(el_max_val, pos, samp, verticalalignment='center', fontsize=8)
                 # 1:1 line
                 ax[ii].axline((0, 0), slope=1, color='k', linestyle='--')
@@ -1120,3 +1200,40 @@ class CalibrationEditorUI:
                 plt.close(fig)  # close the figure to prevent duplicate display in some environments
         except Exception as e:
             print(f"Error updating plots: {e}")
+
+    def calibrate(self):
+        """Use the filtered standard measurements to create a calibration.
+        
+    
+        """
+        # ensure standards have been selected and filtered
+        if not hasattr(self, 'filtered_measurements'):
+            with self.calibration_output:
+                clear_output()
+                print("Please filter standards first.")
+            return
+        # iterate over all elements and fit line with uncertainty slope and intercept fixed at 0 using measurement uncertainties and standard uncertainties
+        self.calibration_df = pd.DataFrame(columns=['element', 'slope', 'slope_unc'])
+        for ii, el in self.elements:
+            el_df = self.filtered_measurements[self.filtered_measurements['quantity'] == el]
+            if el_df.empty:
+                continue
+            el_by_samp = el_df.groupby('aliquot')['mean'].agg(list)
+            positions =np.array([self.stand_def_df.loc[self.stand_def_df['Sample'] == sample][el].values[0] for sample in el_by_samp.index])
+            medians = el_df.groupby('aliquot')['mean'].median()
+            stand_unc = np.array([self.stand_def_df.loc[self.stand_def_df['Sample'] == sample][f'{el} 2-Sigma'].values[0] for sample in el_by_samp.index])
+            # use curve_fit to fit line with intercept fixed at 0
+            def linear_func(x, m):
+                return m * x
+            try:
+                popt, pcov = curve_fit(linear_func, medians, positions, sigma=stand_unc, absolute_sigma=True)
+                slope = popt[0]
+                slope_unc = np.sqrt(np.diag(pcov))[0]
+                with self.calibration_output:
+                    clear_output()
+                    print(f'Calibration for {el}: slope = {slope:.4f} ± {slope_unc:.4f}')
+            except Exception as e:
+                with self.calibration_output:
+                    clear_output()
+                    print(f"Error fitting calibration for {el}: {e}")
+                continue
