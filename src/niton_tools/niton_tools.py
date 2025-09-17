@@ -9,7 +9,7 @@ from ipyfilechooser import FileChooser
 import ipywidgets as w
 from IPython.display import display, clear_output, HTML
 
-from scipy.optimize import curve_fit
+from scipy import odr
 
 import matplotlib.pyplot as plt
 
@@ -1094,6 +1094,7 @@ class CalibrationEditorUI:
             'sig': ('mean', 'std'),
             'max': ('mean', 'max'),
             'min': ('mean', 'min'),
+            'mean': ('mean', 'mean'),
         }
         percentiles = [2.5, 25, 50, 75, 97.5]
         for p in percentiles:
@@ -1213,27 +1214,53 @@ class CalibrationEditorUI:
                 print("Please filter standards first.")
             return
         # iterate over all elements and fit line with uncertainty slope and intercept fixed at 0 using measurement uncertainties and standard uncertainties
-        self.calibration_df = pd.DataFrame(columns=['element', 'slope', 'slope_unc'])
-        for ii, el in self.elements:
-            el_df = self.filtered_measurements[self.filtered_measurements['quantity'] == el]
-            if el_df.empty:
+        self.calibration_df = pd.DataFrame(columns=['element', 
+                                                    'slope', 'slope_unc', 
+                                                    'standards_used', 'measurements_per_standard'])
+        for el in self.elements:
+            # standards used for this element
+            cur_el_standards = self.standard_element_df.xs(el, level=1).index.tolist()
+            # number of measurements per standard
+            cur_el_measurements_per_standard = self.standard_element_df.xs(el, level=1)['n'].values
+            # measured
+            cur_el_meas_means = self.standard_element_df.xs(el, level=1)['mean'].values
+            cur_el_meas_sigs = self.standard_element_df.xs(el, level=1)['sig'].values
+            # known
+            cur_el_know_means = self.stand_def_df.loc[self.standard_element_df.xs(el, level=1).index][el].values
+            cur_el_know_sigs = self.stand_def_df.loc[self.standard_element_df.xs(el, level=1).index][f'{el} 2-Sigma'].values / 2  # convert 2-sigma to 1-sigma
+            # skip if no measurements for this element
+            if cur_el_meas_means.size == 0:
                 continue
-            el_by_samp = el_df.groupby('aliquot')['mean'].agg(list)
-            positions =np.array([self.stand_def_df.loc[self.stand_def_df['Sample'] == sample][el].values[0] for sample in el_by_samp.index])
-            medians = el_df.groupby('aliquot')['mean'].median()
-            stand_unc = np.array([self.stand_def_df.loc[self.stand_def_df['Sample'] == sample][f'{el} 2-Sigma'].values[0] for sample in el_by_samp.index])
-            # use curve_fit to fit line with intercept fixed at 0
-            def linear_func(x, m):
-                return m * x
+            # fit line with slope only, intercept fixed at 0 using orthogonal distance regression
             try:
-                popt, pcov = curve_fit(linear_func, medians, positions, sigma=stand_unc, absolute_sigma=True)
-                slope = popt[0]
-                slope_unc = np.sqrt(np.diag(pcov))[0]
-                with self.calibration_output:
-                    clear_output()
-                    print(f'Calibration for {el}: slope = {slope:.4f} ± {slope_unc:.4f}')
+                # define linear function with intercept fixed at 0
+                def linear_func(B, x):
+                    return B[0] * x  # B[0] is the slope
+
+                # create a Model for ODR
+                linear_model = odr.Model(linear_func)
+
+                # create a RealData object using the measured and known values along with their standard deviations
+                data = odr.RealData(cur_el_meas_means, cur_el_know_means, sx=cur_el_meas_sigs, sy=cur_el_know_sigs)
+
+                # set up ODR with the model and data
+                odr_instance = odr.ODR(data, linear_model, beta0=[1.0])  # initial guess for slope
+
+                # run the regression
+                odr_output = odr_instance.run()
+
+                # extract slope and its standard error
+                slope = odr_output.beta[0]
+                slope_unc = odr_output.sd_beta[0]
+
+                # record results
+                self.calibration_df = pd.concat([self.calibration_df, 
+                                                 pd.DataFrame({'element': [el],
+                                                               'slope': [slope],
+                                                               'slope_unc': [slope_unc],
+                                                               'standards_used': [cur_el_standards],
+                                                               'measurements_per_standard': [cur_el_measurements_per_standard]} )],
+                                                 ignore_index=True)
             except Exception as e:
-                with self.calibration_output:
-                    clear_output()
-                    print(f"Error fitting calibration for {el}: {e}")
+                print(f"Error fitting calibration for element {el}: {e}")
                 continue
