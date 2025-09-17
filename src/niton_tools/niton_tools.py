@@ -30,6 +30,20 @@ for quantity in quantities:
     quantity_column_map[quantity] = dict(zip(cur_df['type'], cur_df['niton column']))
     quantity_unit_map[quantity] = dict(zip(cur_df['type'], cur_df['unit']))
 
+# helper functions to map element columns to multiindex levels
+def build_newcol(row):
+    if row["type"] == "mean":
+        return (row["quantity"], "standard mean")
+    elif row["type"] == "uncertainty":
+        return (row["quantity"], "standard 2-Sigma")
+    else:
+        return (row["quantity"], row["type"])
+
+col_map = {
+    row["niton column"]: build_newcol(row)
+    for _, row in meas_dict_df.iterrows()
+}
+
 def validate_standard_measurements(df: pd.DataFrame):
     """Validate the standard measurements dataframe.
 
@@ -911,7 +925,9 @@ class CalibrationEditorUI:
         """
         # check that self.standard_element_df exists
         if not hasattr(self, 'standard_element_df'):
-            print("Please filter standards first.")
+            with self.plotting_output:
+                clear_output()
+                print("Please filter standards first.")
             return
         
         try:
@@ -1001,6 +1017,14 @@ class CalibrationEditorUI:
             self.filtered_measurements = self.filter_outliers(self.filtered_measurements, 
                                                          method=method,
                                                          threshold=threshold)
+            
+            # group by aliquot and element (multiindex) to summarize number of measurements per element (one columns)
+            summary = self.filtered_measurements.groupby(['aliquot', 'quantity']).size().unstack(fill_value=0).T
+            # create a similar summary dataframe based on the standard definitions to show which elements are defined for each standard
+            stand_def_summary = self.stand_def_df[summary.index].T[summary.columns]
+            # for each element, create logical array showing which standards have that element defined (not NaN) and with more than self.min_measurements_int.value measurements
+            self.standard_filter_df = (stand_def_summary.notna()) & (summary >= self.min_measurements_int.value)
+
             # process filtered standards
             self.process_filtered_standards()
 
@@ -1013,20 +1037,25 @@ class CalibrationEditorUI:
                 if self.filtered_measurements.empty:
                     print("No measurements found for the selected criteria.")
                     return
-                # group by aliquot and element (multiindex) to summarize number of measurements per element (one columns)
-                summary = self.filtered_measurements.groupby(['aliquot', 'quantity']).size().unstack(fill_value=0).T
-                # show cells with fewer than min_measurements_int.value measurements in red
+                nan_styles = stand_def_summary.isna().replace(
+                    {True: "border: 2px solid red;",
+                    False: ""}
+                )
+                # Ensure alignment with summary
+                nan_styles = nan_styles.reindex_like(summary)
                 # also highlight rows with fewer than min_standards_int.value standards in red
                 summary_styled = summary.style.map(lambda x: 'color: red' if x < self.min_measurements_int.value else 'color: black')\
                 .apply(lambda r: [
                     # If the row meets the condition → colour the whole row,
                     # otherwise leave the cell unchanged (empty string).
-                    'background-color: lightcoral' 
-                    if (len(selected_standards) - (r < self.min_measurements_int.value).sum()) < self.min_standards_int.value else ''
+                    'background-color: mistyrose;' 
+                    if self.standard_filter_df.loc[r.name].sum() < self.min_standards_int.value
+                    else ''
                     for _ in r   # repeat the same style for every column in this row
-                ],
-                axis=1        # tell pandas “apply this function to each row”
-                )
+                    ],
+                    axis=1        # tell pandas “apply this function to each row”
+                )\
+                .apply(lambda df: nan_styles, axis=None)
                 display(summary_styled)
         except Exception as e:
             print(f"Error filtering standards: {e}")
@@ -1102,11 +1131,24 @@ class CalibrationEditorUI:
         self.standard_element_df = self.filtered_measurements.groupby(['aliquot', 'quantity']).agg(**agg_funcs).reset_index()
         self.standard_element_df.rename(columns={'aliquot': 'standard', 'quantity': 'element'}, inplace=True)
         self.standard_element_df.set_index(['standard', 'element'], inplace=True)
+        
+        # add standard known values and uncertainties from self.stand_def_df
+        elem_cols = [c for c in self.stand_def_df.columns if c in col_map]
+        stand_def_df_restruct = self.stand_def_df[elem_cols].rename(columns=col_map)
+        stand_def_df_restruct.columns = pd.MultiIndex.from_tuples(stand_def_df_restruct.columns)
+        stand_def_df_restruct = stand_def_df_restruct.stack(level=0, future_stack=True).rename_axis(['standard', 'element'])
+        # perform join
+        self.standard_element_df = self.standard_element_df.join(stand_def_df_restruct, how='left')
+
+        # drop any rows with NaN in the standard mean column
+        self.standard_element_df = self.standard_element_df.dropna(subset=['standard mean'])
         # filter out standards with fewer than min_measurements_int.value measurements
         self.standard_element_df = self.standard_element_df[self.standard_element_df['n'] >= self.min_measurements_int.value]
-        # filter out elements with fewer than min_standards_int.value standards; also drop from the multiindex
+
+        # filter out elements with fewer than min_standards_int.value standards
         self.standard_element_df = self.standard_element_df.groupby('element').filter(lambda x: len(x) >= self.min_standards_int.value)
         self.standard_element_df.index = self.standard_element_df.index.remove_unused_levels()
+
 
     def plot_filtered_standards(self, change):
         """Callback for when an element checkbox is changed.
