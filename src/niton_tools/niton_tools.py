@@ -10,6 +10,7 @@ import ipywidgets as w
 from IPython.display import display, clear_output, HTML
 
 from scipy import odr
+from scipy import stats
 
 import matplotlib.pyplot as plt
 
@@ -657,9 +658,7 @@ class CalibrationEditorUI:
 
         # date range selection                                         
         self.start_date_picker = w.DatePicker(description='Start Date:')
-        self.start_date_picker.observe(self.filter_standards, names='value')
         self.end_date_picker = w.DatePicker(description='End Date:')
-        self.end_date_picker.observe(self.filter_standards, names='value')
 
         self.date_box = w.VBox([w.HTML('Select Date Range:'),
                                 self.start_date_picker, 
@@ -691,14 +690,12 @@ class CalibrationEditorUI:
                                                   value='IQR',
                                                   description='Outlier Method:',
                                                   style={'description_width': '200px'})
-        self.outlier_method_dropdown.observe(self.filter_standards, names='value')
         self.outlier_threshold_float = w.BoundedFloatText(value=1.5, 
                                                           min=0, 
                                                           max=10,
                                                           step=0.1,
                                                           description='Outlier Threshold:',
                                                           style={'description_width': '200px'},)
-        self.outlier_threshold_float.observe(self.filter_standards, names='value')
         self.outlier_box = w.VBox([w.HTML('Outlier Filtering Options:'),
                                    self.outlier_method_dropdown,
                                    self.outlier_threshold_float],
@@ -711,7 +708,6 @@ class CalibrationEditorUI:
                                                      step=1,
                                                      description='Min Measurements per Standard:',
                                                      style={'description_width': '200px'})
-        self.min_measurements_int.observe(self.filter_standards, names='value')
         
         # minimum number of standards per element
         self.min_standards_int = w.BoundedIntText(value=4,
@@ -720,13 +716,14 @@ class CalibrationEditorUI:
                                                   step=1,
                                                   description='Min Standards per Element:',
                                                   style={'description_width': '200px'})
-        self.min_standards_int.observe(self.filter_standards, names='value')
 
-        # create output to provide summary information for each selected standard based on filter values
-        self.filter_summary_output = w.Output(layout=w.Layout(border='1px solid gray'))
-        self.filter_summary_output_container = w.VBox([w.HTML('Filter Summary:'),
-                                                      self.filter_summary_output],
-                                                      layout=w.Layout(padding='5px'))
+        # button to run filtering and calibration
+        self.run_filter_button = w.Button(description='Filter Standards and Calibrate',
+                                         style={'button_color': 'lightgreen'},
+                                         layout=w.Layout(width='200px'))
+        self.run_filter_button.on_click(self.filter_standards_calibrate)
+
+        
         # assemble filter options
         self.filter_box = w.HBox([w.VBox([self.date_box, 
                                           self.reading_type_box_container,
@@ -734,14 +731,35 @@ class CalibrationEditorUI:
                                           self.min_measurements_int,
                                           self.min_standards_int],), 
                                   self.standard_box_container,
-                                  self.filter_summary_output_container])
+                                  self.run_filter_button])
         self.filter_box_container = w.VBox([w.HTML("<b>2. Filter Standards for Calibration</b>"),
                                            self.filter_box],
                                            layout=w.Layout(margin='10px 0px 10px 0px', 
                                                            border='2px solid gray', 
                                                            padding='5px'))
+        
+        
+        # part 3: summary standard filtering and calibration information
+        
+        # create output to provide summary information for each selected standard based on filter values
+        self.filter_summary_output = w.Output(layout=w.Layout(border='1px solid gray'))
+        self.filter_summary_output_container = w.VBox([w.HTML('Filter Summary:'),
+                                                      self.filter_summary_output],
+                                                      layout=w.Layout(padding='5px'))
+        # output to show calibration summary
+        self.calibration_summary_output = w.Output(layout=w.Layout(border='1px solid gray'))
+        self.calibration_summary_output_container = w.VBox([w.HTML('Calibration Summary:'),
+                                                          self.calibration_summary_output],
+                                                          layout=w.Layout(padding='5px'))
+        # container for filter summary and calibration summary
+        self.summary_container = w.VBox([w.HTML("<b>3. Filter and Calibration Summary</b>"),
+                                         w.HBox([self.filter_summary_output_container,
+                                                 self.calibration_summary_output_container],)],
+                                        layout=w.Layout(margin='10px 0px 10px 0px', 
+                                                                 border='2px solid gray', 
+                                                                 padding='5px'))
 
-        # part 3: element selection, plotting, calibration
+        # part 4: element selection, plotting, calibration
 
         # widget to hold elements to include in plot
         self.element_box = w.VBox(layout=w.Layout(border='1px solid gray',
@@ -759,7 +777,7 @@ class CalibrationEditorUI:
         self.calibration_output = w.Output()
 
         # container for element selection and plots
-        self.plotting_container = w.VBox([w.HTML("<b>3. Plotting</b>"),
+        self.plotting_container = w.VBox([w.HTML("<b>4. Plotting</b>"),
                                          w.HBox([self.element_box_container,
                                                  self.plotting_output])],
                                          layout=w.Layout(margin='10px 0px 10px 0px', 
@@ -773,7 +791,9 @@ class CalibrationEditorUI:
                     self.file_chooser_box_container,
                     # filter options
                     self.filter_box_container,
-                    # element selection
+                    # filter and calibration summary
+                    self.summary_container,
+                    # plotting with element selection
                     self.plotting_container
                 ])
         display(self.ui)
@@ -949,12 +969,16 @@ class CalibrationEditorUI:
         except Exception as e:
             print(f"Error loading elements: {e}")
 
-    def filter_standards(self, change):
-        """Callback to filter standards based on selected criteria.
+    def filter_standards_calibrate(self, change):
+        """Callback to filter standards based on selected criteria and perform calibration.
 
-        Criteria include date range, standards to use, and reading types.
-
-        All output is sent to self.filter_summary_output.
+        Criteria include 
+        - date range
+        - standards to use
+        - reading types
+        - outlier filtering method and threshold
+        - minimum number of measurements per standard
+        - minimum number of standards per element
 
         Parameters
         ----------
@@ -1019,11 +1043,11 @@ class CalibrationEditorUI:
                                                          threshold=threshold)
             
             # group by aliquot and element (multiindex) to summarize number of measurements per element (one columns)
-            summary = self.filtered_measurements.groupby(['aliquot', 'quantity']).size().unstack(fill_value=0).T
+            self.filter_summary = self.filtered_measurements.groupby(['aliquot', 'quantity']).size().unstack(fill_value=0).T
             # create a similar summary dataframe based on the standard definitions to show which elements are defined for each standard
-            stand_def_summary = self.stand_def_df[summary.index].T[summary.columns]
+            self.stand_def_summary = self.stand_def_df[self.filter_summary.index].T[self.filter_summary.columns]
             # for each element, create logical array showing which standards have that element defined (not NaN) and with more than self.min_measurements_int.value measurements
-            self.standard_filter_df = (stand_def_summary.notna()) & (summary >= self.min_measurements_int.value)
+            self.standard_filter_df = (self.stand_def_summary.notna()) & (self.filter_summary >= self.min_measurements_int.value)
 
             # process filtered standards
             self.process_filtered_standards()
@@ -1031,34 +1055,16 @@ class CalibrationEditorUI:
             # create element selection checkboxes based on elements present in filtered and processed measurements
             self.set_element_checkboxes()
 
-            # display summary information
-            with self.filter_summary_output:
-                clear_output()
-                if self.filtered_measurements.empty:
-                    print("No measurements found for the selected criteria.")
-                    return
-                nan_styles = stand_def_summary.isna().replace(
-                    {True: "border: 2px solid red;",
-                    False: ""}
-                )
-                # Ensure alignment with summary
-                nan_styles = nan_styles.reindex_like(summary)
-                # also highlight rows with fewer than min_standards_int.value standards in red
-                summary_styled = summary.style.map(lambda x: 'color: red' if x < self.min_measurements_int.value else 'color: black')\
-                .apply(lambda r: [
-                    # If the row meets the condition → colour the whole row,
-                    # otherwise leave the cell unchanged (empty string).
-                    'background-color: mistyrose;' 
-                    if self.standard_filter_df.loc[r.name].sum() < self.min_standards_int.value
-                    else ''
-                    for _ in r   # repeat the same style for every column in this row
-                    ],
-                    axis=1        # tell pandas “apply this function to each row”
-                )\
-                .apply(lambda df: nan_styles, axis=None)
-                display(summary_styled)
+            # generate calibration
+            self.calibrate()
+
+            # display summaries
+            self.display_filter_summary()
+            self.display_calibration_summary()
+
+            
         except Exception as e:
-            print(f"Error filtering standards: {e}")
+            print(f"Error filtering and/or calibrating standards: {e}")
 
     def filter_outliers(self, df, method='IQR', threshold=None):
         """Filter outliers from a dataframe of measurements.
@@ -1112,6 +1118,17 @@ class CalibrationEditorUI:
         
     def process_filtered_standards(self):
         """Process the filtered standard measurements to compute summary statistics.
+
+        Creates self.standard_element_df with MultiIndex (standard, element) and columns:
+            - mean_list: list of mean measurements
+            - n: number of measurements
+            - sig: standard deviation of measurements
+            - max: maximum measurement
+            - min: minimum measurement
+            - mean: mean of measurements
+            - 2.5, 25, 50, 75, 97.5: percentiles of measurements
+            - standard mean: known standard value from self.stand_def_df
+            - standard 2-Sigma: known standard uncertainty from self.stand_def_df
         """
         if not hasattr(self, 'filtered_measurements'):
             print("Please filter standards first.")
@@ -1148,7 +1165,40 @@ class CalibrationEditorUI:
         # filter out elements with fewer than min_standards_int.value standards
         self.standard_element_df = self.standard_element_df.groupby('element').filter(lambda x: len(x) >= self.min_standards_int.value)
         self.standard_element_df.index = self.standard_element_df.index.remove_unused_levels()
+    
+    def display_filter_summary(self):
+        """Display summary of filtered standards and elements in the filter_summary_output widget.
+        """
+        # display summary information for filtered standards
+        with self.filter_summary_output:
+            clear_output()
+            if not hasattr(self, 'filter_summary') or self.filter_summary.empty:
+                print("Please filter standards first.")
+                return
+            if self.filtered_measurements.empty:
+                print("No measurements found for the selected criteria.")
+                return
 
+            nan_styles = self.stand_def_summary.isna().replace(
+                {True: "border: 2px solid red;",
+                False: ""}
+            )
+            # Ensure alignment with summary
+            nan_styles = nan_styles.reindex_like(self.filter_summary)
+            # also highlight rows with fewer than min_standards_int.value standards in red
+            summary_styled = self.filter_summary.style.map(lambda x: 'color: red' if x < self.min_measurements_int.value else 'color: black')\
+            .apply(lambda r: [
+                # If the row meets the condition → colour the whole row,
+                # otherwise leave the cell unchanged (empty string).
+                'background-color: mistyrose;' 
+                if self.standard_filter_df.loc[r.name].sum() < self.min_standards_int.value
+                else ''
+                for _ in r   # repeat the same style for every column in this row
+                ],
+                axis=1        # tell pandas “apply this function to each row”
+            )\
+            .apply(lambda df: nan_styles, axis=None)
+            display(summary_styled)
 
     def plot_filtered_standards(self, change):
         """Callback for when an element checkbox is changed.
@@ -1183,6 +1233,12 @@ class CalibrationEditorUI:
                 clear_output()
                 print("No measurements found for the selected criteria.")
             return
+        # ensure calibration has been performed
+        if not hasattr(self, 'calibration_df'):
+            with self.plotting_output:
+                clear_output()
+                print("Please perform calibration first.")
+            return
         # get list of selected elements
         elements = [cb.description for cb in self.element_checkboxes if cb.value]
         if len(elements) == 0:
@@ -1191,12 +1247,26 @@ class CalibrationEditorUI:
                 print("Please select at least one element to plot.")
             return
         try:
-            selected_standards = [cb.description for cb in self.standard_checkboxes if cb.value]
             num_elements = len(elements)
             fig, ax = plt.subplots(num_elements, 1, figsize=(5, 5*num_elements))
             ax = np.atleast_1d(ax)  # ensure ax is always an array even if num_elements=1
             # create subplots for each selected element
             for ii, el in enumerate(elements):
+                # 1:1 line
+                ax[ii].axline((0, 0), slope=1, color='k', linestyle='--')
+                # plot calibration with prediction intervals
+                cur_x = np.linspace(0, 1.1 * self.standard_element_df.xs(el, level=1)['max'].max(), 100)
+                cur_y = self.calibration_df.loc[el]['slope'] * cur_x
+                pred_int = prediction_interval(
+                    dfdp=[cur_x], # derivative with respect to slope only
+                    pcov=self.calibration_df.loc[el]['cov_matrix'],
+                    yerr=self.calibration_df.loc[el]['y_err_max'],
+                    signif=[68, 95]
+                )
+                ax[ii].plot(cur_x, cur_y, color='k', label='Calibration fit')
+                ax[ii].fill_between(cur_x, cur_y - pred_int[0], cur_y + pred_int[0], color='orange', alpha=0.7, label='68% Prediction Interval')
+                ax[ii].fill_between(cur_x, cur_y - pred_int[1], cur_y + pred_int[1], color='moccasin', alpha=0.7, label='95% Prediction Interval')
+
                 # set up violins
                 positions = self.stand_def_df.loc[self.standard_element_df.xs(el, level=1).index][el].values
                 width = 0.05 * np.max(positions)
@@ -1221,17 +1291,17 @@ class CalibrationEditorUI:
                 # plot standard uncertainty bars at median value of standard measurements
                 medians = self.standard_element_df.xs(el, level=1)['50'].values
                 stand_unc = self.stand_def_df.loc[self.standard_element_df.xs(el, level=1).index][f'{el} 2-Sigma'].values
-                ax[ii].vlines(medians, positions-stand_unc, positions+stand_unc, color='orange', lw=2, label='Standard uncertainty')
+                ax[ii].vlines(medians, positions-stand_unc, positions+stand_unc, color='purple', lw=2, label='Standard uncertainty')
                 # label rightmost extents of whiskers with standard names
                 for samp, pos, el_max_val in zip(self.standard_element_df.xs(el, level=1).index,
                                                 positions, 
                                                 self.standard_element_df.xs(el, level=1)['max'].values):
                     ax[ii].text(el_max_val, pos, samp, verticalalignment='center', fontsize=8)
-                # 1:1 line
-                ax[ii].axline((0, 0), slope=1, color='k', linestyle='--')
 
                 ax[ii].set_title(f'{el}')
                 ax[ii].set_ylabel('Known concentration (ppm)')
+                ax[ii].set_xlim(0, 1.1 * self.standard_element_df.xs(el, level=1)['max'].max())
+                ax[ii].set_ylim(0, 1.1 * np.max(positions+stand_unc))
 
             ax[-1].set_xlabel('Measured concentration (ppm)')
             ax[0].legend()
@@ -1256,9 +1326,7 @@ class CalibrationEditorUI:
                 print("Please filter standards first.")
             return
         # iterate over all elements and fit line with uncertainty slope and intercept fixed at 0 using measurement uncertainties and standard uncertainties
-        self.calibration_df = pd.DataFrame(columns=['element', 
-                                                    'slope', 'slope_unc', 
-                                                    'standards_used', 'measurements_per_standard'])
+        calibration_dicts = []
         for el in self.elements:
             # standards used for this element
             cur_el_standards = self.standard_element_df.xs(el, level=1).index.tolist()
@@ -1275,15 +1343,14 @@ class CalibrationEditorUI:
                 continue
             # fit line with slope only, intercept fixed at 0 using orthogonal distance regression
             try:
-                # define linear function with intercept fixed at 0
-                def linear_func(B, x):
-                    return B[0] * x  # B[0] is the slope
-
                 # create a Model for ODR
                 linear_model = odr.Model(linear_func)
 
                 # create a RealData object using the measured and known values along with their standard deviations
-                data = odr.RealData(cur_el_meas_means, cur_el_know_means, sx=cur_el_meas_sigs, sy=cur_el_know_sigs)
+                data = odr.RealData(cur_el_meas_means, 
+                                    cur_el_know_means, 
+                                    sx=cur_el_meas_sigs, 
+                                    sy=cur_el_know_sigs)
 
                 # set up ODR with the model and data
                 odr_instance = odr.ODR(data, linear_model, beta0=[1.0])  # initial guess for slope
@@ -1294,15 +1361,108 @@ class CalibrationEditorUI:
                 # extract slope and its standard error
                 slope = odr_output.beta[0]
                 slope_unc = odr_output.sd_beta[0]
+                y_err_max = np.max(np.abs(odr_output.eps))
+
+                # reduced variance 95% limit (chi2 level for given dof at 95% confidence level)
+                dof = len(cur_el_meas_means)-1
+                red_var_95 = stats.chi2.ppf(0.95, dof)/dof
 
                 # record results
-                self.calibration_df = pd.concat([self.calibration_df, 
-                                                 pd.DataFrame({'element': [el],
-                                                               'slope': [slope],
-                                                               'slope_unc': [slope_unc],
-                                                               'standards_used': [cur_el_standards],
-                                                               'measurements_per_standard': [cur_el_measurements_per_standard]} )],
-                                                 ignore_index=True)
+                calibration_dicts.append({'element': el,
+                                           'slope': slope,
+                                           'slope_unc': slope_unc,
+                                           'y_err_max': y_err_max,
+                                           'reduced variance': odr_output.res_var,
+                                           'reduced variance 95%': red_var_95,
+                                           'cov_matrix': odr_output.cov_beta,
+                                           'standards_used': cur_el_standards,
+                                           'measurements_per_standard': cur_el_measurements_per_standard})
             except Exception as e:
                 print(f"Error fitting calibration for element {el}: {e}")
                 continue
+
+        # create dataframe from calibration_dicts
+        self.calibration_df = pd.DataFrame(calibration_dicts).set_index('element')
+
+    def display_calibration_summary(self):
+        """Display summary of calibration in the calibration_summary_output widget.
+        """
+        with self.calibration_summary_output:
+            clear_output()
+            if not hasattr(self, 'calibration_df') or self.calibration_df.empty:
+                print("No calibration available. Please filter standards and generate calibration first.")
+                return
+            calibration_summary = self.calibration_df[['slope', 
+                                                          'slope_unc', 
+                                                          'reduced variance',
+                                                          'reduced variance 95%']]
+                
+            # Helper function to style a row based on a condition between two columns
+            def style_variance_row(row):
+                # Default is no style for any cell in this row
+                styles = [''] * len(row)
+                # Apply style to 'reduced variance' cell if condition is met
+                if row['reduced variance'] > row['reduced variance 95%']:
+                    col_idx = row.index.get_loc('reduced variance')
+                    styles[col_idx] = 'background-color: mistyrose'
+                return styles
+
+            calibration_summary_styled = calibration_summary.style.map(
+                # 1. This first map for single-column styling was correct and remains.
+                #    It styles 'slope' cells based only on their own value.
+                lambda x: 'background-color: mistyrose' if abs(x - 1) > 0.3 else '', 
+                subset=['slope']
+            ).apply(
+                # 2. This apply is the new part for multi-column styling.
+                #    It styles 'reduced variance' cells based on another column.
+                style_variance_row, 
+                axis=1
+            )
+                                                        
+            display(calibration_summary_styled)
+
+def prediction_interval(dfdp, pcov, yerr, signif=95):
+    """Prediction interval for ODR fits.
+
+    Taken from https://stackoverflow.com/questions/60889680/how-to-plot-1-sigma-prediction-interval-for-scipy-odr
+
+    Parameters
+    ----------
+    dfdp : array-like
+        Derivatives of the fit function with respect to the fit parameters at the new x value(s).
+        Each element of the list/array corresponds to one parameter and contains an array of derivatives at each x value.
+    pcov : 2D array-like
+        Covariance matrix of the fit parameters (ODR_output.cov_beta).
+    yerr : float or array-like
+        Maximum y error of the data points (np.max(ODR_output.eps)).
+    signif : float or array-like, optional
+        Significance level (e.g., 95 for 95% prediction interval), by default 95.
+        If array-like, then output is calculated for each significance level.
+    
+    Returns
+    -------
+    float or array-like
+        Prediction band offset for a new measurement at the given x value(s). Shape is (n,) if signif is a float, or (len(signif), n) if signif is array-like.
+    """
+    n_params = len(dfdp)  # number of fit parameters
+    n = len(dfdp[0])  # number of data points
+
+    # convert provided value to a significance level (e.g. 95. -> 0.05), then calculate alpha
+    signif = np.atleast_1d(signif)
+    alpha = 1. - (1 - signif / 100.0) / 2
+
+    # student’s t test
+    tval = stats.t.ppf(alpha, n - n_params)
+
+    # process covariance matrix and derivatives
+    d = np.zeros(n)
+    for j in range(n_params):
+        for k in range(n_params):
+            d += dfdp[j] * dfdp[k] * pcov[j,k]
+
+    # return prediction band offset for a new measurement
+    return np.squeeze(tval.reshape(-1, 1) * np.sqrt(yerr**2 + d))
+
+# define linear function with intercept fixed at 0
+def linear_func(B, x):
+    return B[0] * x  # B[0] is the slope
