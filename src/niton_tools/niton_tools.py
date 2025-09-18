@@ -859,6 +859,14 @@ class CalibrationEditorUI:
                 missing_cols = set(meas_dict_df['niton column']) - set(self.stand_def_df.columns)
                 print(f"Error: Missing required columns in {file_path}: {missing_cols}.")
                 return
+            # for standards for which elements are not nan, if the corresponding 2-Sigma column is nan, then assign 10% uncertainty
+            for ii, el in enumerate(quantities):
+                stand_el_idx = ~self.stand_def_df[el].isna()
+                cur_sig_col = quantity_column_map[el]['uncertainty']
+                stand_el_sig_idx = ~self.stand_def_df[cur_sig_col].isna()
+                # indices of standards for current element whose uncertainty must be set to 10%
+                idx = stand_el_idx & ~stand_el_sig_idx
+                self.stand_def_df.loc[idx, cur_sig_col] = 0.1 * self.stand_def_df.loc[idx, el]
 
             print(f"Loaded standard definitions from {file_path}.")
         except Exception as e:
@@ -1253,7 +1261,9 @@ class CalibrationEditorUI:
             # create subplots for each selected element
             for ii, el in enumerate(elements):
                 # 1:1 line
-                ax[ii].axline((0, 0), slope=1, color='k', linestyle='--')
+                ax[ii].axline((0, 0), slope=1, 
+                              color='k', linestyle='--',
+                              label='1:1')
                 # plot calibration with prediction intervals
                 cur_x = np.linspace(0, 1.1 * self.standard_element_df.xs(el, level=1)['max'].max(), 100)
                 cur_y = self.calibration_df.loc[el]['slope'] * cur_x
@@ -1298,10 +1308,11 @@ class CalibrationEditorUI:
                                                 self.standard_element_df.xs(el, level=1)['max'].values):
                     ax[ii].text(el_max_val, pos, samp, verticalalignment='center', fontsize=8)
 
-                ax[ii].set_title(f'{el}')
+                ax[ii].set_title(f'{el}', fontweight='bold')
                 ax[ii].set_ylabel('Known concentration (ppm)')
                 ax[ii].set_xlim(0, 1.1 * self.standard_element_df.xs(el, level=1)['max'].max())
-                ax[ii].set_ylim(0, 1.1 * np.max(positions+stand_unc))
+                ax[ii].set_ylim(0, 1.1 * np.nanmax(positions+stand_unc))
+                ax[ii].grid()
 
             ax[-1].set_xlabel('Measured concentration (ppm)')
             ax[0].legend()
