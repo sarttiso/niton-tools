@@ -794,11 +794,13 @@ class CalibrationEditorUI:
         
         # calibration file name widget
         self.calibration_name_input = w.Text(description='Calibration File Name:',
-                                             style={'button_color': 'lightgreen'},
-                                             layout=w.Layout(width='200px'))
+                                             style={'description_width': '200px'},
+                                             layout=w.Layout(width='400px'))
 
         # calibration save button
-        self.calibration_save_button = w.Button(description='Save Calibration')
+        self.calibration_save_button = w.Button(description='Save Calibration',
+                                                style={'button_color': 'lightgreen'},
+                                                layout=w.Layout(width='200px'))
         self.calibration_save_button.on_click(self.calibration_save)
 
         # output area for feedback

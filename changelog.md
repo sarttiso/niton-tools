@@ -4,6 +4,7 @@
 
 ## Added
 - `CalibratioEditornUI`: user interface for creating, saving, loading, and applying calibrations based on standard data to unknowns.
+    - calibrations are saved as json files and include metadata regarding the standards used and standard measurement filter protocols, along with other calibration settings
 
 ## v0.1.1
 
