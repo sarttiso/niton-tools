@@ -6,10 +6,11 @@ The package provides the following functionality:
 - User interface for adding standard measurements to a single SQLite database managed by [`GeochemDB`](https://github.com/sarttiso/geochemdb).
     - Assumes that standard measurements are systematically aggregated within an excel file where each sheet contains standard measurements from a single analytical session
     - Assumes a preconfigured SQLite database with filled auxililary tables and compatibility with [`GeochemDB`](https://github.com/sarttiso/geochemdb)
-- Instrument calibration based on standard measurements (in progress)
+- Instrument calibration based on standard measurements
     - Ability to correct concentrations for unknowns according to element-specific calibration lines constrained by known standard measurements
     - Assumes standard measurements are stored in `GeochemDB`-compatible SQLite database
-    - Assumes standard compositions are defined
+    - Calibrations stored as json files with metadata
+    - ipywidgets-based UIs for creating and applying calibrations
 
 ## Installation
 
