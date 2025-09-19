@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.1
+
+## Fixed
+- include `openpyxl` to open .xlsx files with `pandas`
+
 ## v0.2.0
 
 ## Added
