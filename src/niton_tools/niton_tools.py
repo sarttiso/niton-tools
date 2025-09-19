@@ -3,6 +3,7 @@ import pandas as pd
 import geochemdb
 import os
 from pathlib import Path
+import json
 from typing import Union
 
 from ipyfilechooser import FileChooser
@@ -783,7 +784,34 @@ class CalibrationEditorUI:
                                          layout=w.Layout(margin='10px 0px 10px 0px', 
                                                          border='2px solid gray', 
                                                          padding='5px'))
+        
+        # part 5: calibration saving
 
+        # calibration output folder chooser
+        self.calibration_folder_chooser = FileChooser(start_path='.',
+                                                      title='<b>Select Calibration Folder</b>',
+                                                      show_only_dirs=True)
+        
+        # calibration file name widget
+        self.calibration_name_input = w.Text(description='Calibration File Name:',
+                                             style={'button_color': 'lightgreen'},
+                                             layout=w.Layout(width='200px'))
+
+        # calibration save button
+        self.calibration_save_button = w.Button(description='Save Calibration')
+        self.calibration_save_button.on_click(self.calibration_save)
+
+        # output area for feedback
+        self.calibration_save_output = w.Output()
+
+        self.calibration_save_container = w.VBox([w.HTML('<b>5. Save Calibration</b>'),
+                                                  self.calibration_folder_chooser,
+                                                  self.calibration_name_input,
+                                                  self.calibration_save_button,
+                                                  self.calibration_save_output],
+                                                  layout=w.Layout(margin='10px 0px 10px 0px', 
+                                                         border='2px solid gray', 
+                                                         padding='5px'))
 
         # assemble UI
         self.ui = w.VBox([
@@ -794,7 +822,9 @@ class CalibrationEditorUI:
                     # filter and calibration summary
                     self.summary_container,
                     # plotting with element selection
-                    self.plotting_container
+                    self.plotting_container,
+                    # calibration saving
+                    self.calibration_save_container
                 ])
         display(self.ui)
 
@@ -1431,6 +1461,57 @@ class CalibrationEditorUI:
             )
                                                         
             display(calibration_summary_styled)
+    
+    def calibration_save(self, change):
+        """Save calibration as json file to use for correction unknown standards.
+        """
+        # ensure calibration exists
+        if not hasattr(self, 'calibration_df') or self.calibration_df.empty:
+            with self.calibration_save_output:
+                clear_output()
+                print("No calibration available. Please filter standards and generate calibration first.")
+            return
+        # create dictionary with standard filtering values
+        filter_metadata_dict = {
+            'start_date': self.start_date_picker.value.isoformat(),
+            'end_date': self.end_date_picker.value.isoformat(),
+            'outlier_method': self.outlier_method_dropdown.value,
+            'outlier_threshold': self.outlier_threshold_float.value,
+            'min_measurements_per_standard': self.min_measurements_int.value,
+            'min_standards_per_element': self.min_standards_int.value,
+            'reading_types': [cb.description for cb in self.reading_type_checkboxes if cb.value],
+            'standards': [cb.description for cb in self.standard_checkboxes if cb.value],
+        }
+        # dictionary form of filter_summary
+        filter_summary_dict = self.filter_summary.to_dict()
+        # dictionary form of calibration_df
+        calibration_df_lists = self.calibration_df.map(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
+        calibration_dict = calibration_df_lists.to_dict()
+
+        # final dict
+        calibration_output_dict = {
+            'standard_filter_metadata': filter_metadata_dict,
+            'standard_filter_summary': filter_summary_dict,
+            'calibration': calibration_dict
+        }
+
+        # save as json
+        file_name = self.calibration_name_input.value
+        if not file_name.endswith('.json'):
+            file_name += '.json'
+        file_path = Path(self.calibration_folder_chooser.selected) / file_name
+
+        try:
+            with open(file_path, 'w') as f:
+                json.dump(calibration_output_dict, f, indent=4)
+                with self.calibration_save_output:
+                    clear_output()
+                    print('Calibration saved!')
+        except Exception as e:
+            with self.calibration_save_output:
+                clear_output()
+                print(f"Error saving calibration: {e}")
+
 
 def prediction_interval(dfdp, pcov, yerr, signif=95):
     """Prediction interval for ODR fits.
