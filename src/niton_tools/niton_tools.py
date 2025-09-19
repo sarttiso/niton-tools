@@ -4,6 +4,7 @@ import geochemdb
 import os
 from pathlib import Path
 import json
+from pprint import pprint
 from typing import Union
 
 from ipyfilechooser import FileChooser
@@ -46,7 +47,7 @@ col_map = {
     for _, row in meas_dict_df.iterrows()
 }
 
-def validate_standard_measurements(df: pd.DataFrame):
+def validate_niton_measurements(df: pd.DataFrame):
     """Validate the standard measurements dataframe.
 
     Parameters
@@ -89,7 +90,7 @@ def generate_dataframes(standard_file, sheet_name,
     df = pd.read_excel(standard_file, sheet_name=sheet_name)
     
     # validate dataframe
-    validate_standard_measurements(df)
+    validate_niton_measurements(df)
         
     # connect to geochemdb
     if geochemdb_path is None:
@@ -362,7 +363,7 @@ class StandardUI:
             # read the selected sheet into a dataframe
             self.df = pd.read_excel(file_path, sheet_name=sheet_name)
             # validate dataframe
-            validate_standard_measurements(self.df)
+            validate_niton_measurements(self.df)
             # display dataframe in output widget
             with self.sheet_output:
                 clear_output()
@@ -617,6 +618,335 @@ class StandardUI:
             with self.update_measurements_output:
                 clear_output()
             print(f"Error updating measurements: {e}")
+
+
+class CalibrationApplyUI:
+    """UI to apply a saved calibration to a set of measurements.
+    """
+    def __init__(self):
+        #
+        # set up UI elements
+        #
+        
+        # part 1: file selection
+        
+        # calibration file selection widget (get path to calibration file)
+        self.calibration_file_chooser = FileChooser('./calibration files',
+                                                   title='<b>Select calibration.json</b>',
+                                                   filter_pattern='*.json',
+                                                   show_hidden=False)
+
+        # assign callback function to load and validate the selected calibration file
+        self.calibration_file_chooser.register_callback(self.on_calibration_file_selected)
+        
+        # file with measurements to calibrate (.csv or .xlsx)
+        self.measurements_file_chooser = \
+            FileChooser('../Full Data',  # start in the notebook’s cwd
+                        title='<b>Select measurements to calibrate</b>',
+                        filter_pattern=['*.csv', '*.xlsx'],
+                        show_hidden=False)
+        # assign callback function to load and validate the selected measurements file
+        self.measurements_file_chooser.register_callback(self.on_measurements_file_selected)
+
+        # output to show calibration and measurements file status
+        self.file_selection_output = w.Output()
+        
+        self.file_chooser_box = w.HBox([self.calibration_file_chooser, 
+                                        self.measurements_file_chooser],
+                                       layout=w.Layout(padding='5px'))
+        self.file_chooser_box_container = w.VBox([w.HTML("<b>1. Select Files</b>"),
+                                                  self.file_chooser_box,
+                                                  self.file_selection_output],
+                                       layout=w.Layout(margin='10px 0px 10px 0px', 
+                                                       border='2px solid gray', 
+                                                       padding='5px'))
+        
+        # part 2: visualize calibration statistics
+
+        self.calibration_visualize_button = w.Button(description='Visualize Calibration',
+                                                    style={'button_color': 'lightblue'},
+                                                    layout=w.Layout(width='200px'))
+        self.calibration_visualize_button.on_click(self.visualize_calibration)
+        self.calibration_visualize_output = w.Output(layout=w.Layout(border='1px solid gray'))
+
+        self.calibration_visualize_box = w.VBox([w.HTML("<b>2. Visualize Calibration</b>"),
+                                                self.calibration_visualize_button,
+                                                self.calibration_visualize_output],
+                                                layout=w.Layout(margin='10px 0px 10px 0px', 
+                                                                border='2px solid gray', 
+                                                                padding='5px'))
+        
+        # part 3: apply and save calibration
+
+        self.calibration_apply_button = w.Button(description='Apply Calibration',
+                                                 style={'button_color': 'lightgreen'},
+                                                 layout=w.Layout(width='200px'))
+        self.calibration_apply_button.on_click(self.apply_calibration)
+        self.calibration_apply_output = w.Output(layout=w.Layout(border='1px solid gray'))
+
+        # text widget for calibrated measurements file name
+        self.calibrated_file_name = w.Text(value='',
+                                           placeholder='Enter calibrated file name',
+                                           description='Calibrated File Name:',
+                                           style={'description_width': '200px'},
+                                           layout=w.Layout(width='400px'))
+        self.save_calibrated_file_button = w.Button(description='Save Calibrated File',
+                                                   style={'button_color': 'lightgreen'},
+                                                   layout=w.Layout(width='200px'))
+        self.save_calibrated_file_button.on_click(self.save_calibrated_file)
+        self.save_calibrated_file_output = w.Output()
+
+        self.calibration_apply_box = w.VBox([w.HTML("<b>3. Apply and Save Calibration</b>"),
+                                            self.calibration_apply_button, 
+                                            self.calibration_apply_output,
+                                            w.HBox([self.calibrated_file_name, 
+                                                    self.save_calibrated_file_button],
+                                                   layout=w.Layout(padding='5px')),
+                                            self.save_calibrated_file_output],
+                                            layout=w.Layout(margin='10px 0px 10px 0px', 
+                                                            border='2px solid gray', 
+                                                            padding='5px'))
+
+        # assemble UI
+        self.ui = w.VBox([
+                    # file selection
+                    self.file_chooser_box_container,
+                    # calibration visualization
+                    self.calibration_visualize_box,
+                    # apply and save calibration
+                    self.calibration_apply_box
+                ])
+        display(self.ui)
+
+    def on_calibration_file_selected(self, change):
+        """Callback for when a calibration file is selected.
+
+        Attempts to load the calibration file to validate it.
+
+        Parameters
+        ----------
+        change : dict
+            Dictionary containing information about the change.
+        """
+        if not self.calibration_file_chooser.selected:
+            print("No file selected.")
+            return
+        # path to selected file
+        file_path = Path(self.calibration_file_chooser.selected)
+        if not file_path.exists():
+            with self.file_selection_output:
+                clear_output()
+                print(f"File {file_path} does not exist.")
+            return
+        try:
+            # try to load the calibration file to validate it
+            with open(file_path, 'r') as f:
+                self.calibration = json.load(f)
+            self.validate_process_calibration()
+            with self.file_selection_output:
+                clear_output()
+                print(f"Loaded calibration from {file_path}.")
+        except Exception as e:
+            with self.file_selection_output:
+                clear_output()
+                print(f"Error loading calibration file: {e}")
+
+    def validate_process_calibration(self):
+        """Validate and process calibration data from json.
+        """
+        if not hasattr(self, 'calibration'):
+            print("No calibration loaded.")
+            return
+        # validate calibration structure
+        required_keys = ['standard_filter_metadata', 'standard_filter_summary', 'calibration']
+        for key in required_keys:
+            if key not in self.calibration:
+                print(f"Calibration file missing required key: {key}")
+                return
+        # process calibration data
+        try:
+            self.filter_metadata = self.calibration['standard_filter_metadata']
+            self.filter_summary_df = pd.DataFrame(self.calibration['standard_filter_summary'])
+            self.calibration_df = pd.DataFrame(self.calibration['calibration'])
+        except Exception as e:
+            print(f"Error processing calibration data: {e}")
+            return
+
+    def on_measurements_file_selected(self, change):
+        """Callback for when a measurements file is selected.
+
+        Attempts to load the measurements file to validate it.
+
+        Parameters
+        ----------
+        change : dict
+            Dictionary containing information about the change.
+        """
+        if not self.measurements_file_chooser.selected:
+            with self.file_selection_output:
+                clear_output()
+                print("No file selected.")
+            return
+        # path to selected file
+        file_path = Path(self.measurements_file_chooser.selected)
+        if not file_path.exists():
+            with self.file_selection_output:
+                clear_output()
+                print(f"File {file_path} does not exist.")
+            return
+        try:
+            # try to load the measurements file to validate it
+            if file_path.suffix.lower() == '.xlsx':
+                self.measurements_df = pd.read_excel(file_path)
+            else:
+                self.measurements_df = pd.read_csv(file_path)
+            validate_niton_measurements(self.measurements_df)
+            # replace <LOD with np.nan
+            self.measurements_df.replace('<LOD', np.nan, inplace=True)
+            # set uncertainty values to nan for rows where measurement is nan
+            for el in quantity_column_map.keys():
+                self.measurements_df.loc[self.measurements_df[quantity_column_map[el]['mean']].isna(), 
+                                         quantity_column_map[el]['uncertainty']] = np.nan
+            # set default calibrated file name in text widget
+            self.calibrated_file_name.value = f"{file_path.stem}_calibrated.csv"
+            with self.file_selection_output:
+                clear_output()
+                print(f"Loaded measurements from {file_path}.")
+        except Exception as e:
+            with self.file_selection_output:
+                clear_output()
+                print(f"Error loading measurements file: {e}")
+
+    def visualize_calibration(self, b):
+        """Visualize the calibration data.
+        """
+        if not hasattr(self, 'calibration_df'):
+            with self.calibration_visualize_output:
+                clear_output()
+                print("No calibration loaded.")
+            return
+        if not hasattr(self, 'filter_summary_df'):
+            with self.calibration_visualize_output:
+                clear_output()
+                print("No standard filter summary loaded.")
+            return
+        try:
+            with self.calibration_visualize_output:
+                clear_output()
+                print("Filter Metadata:")
+                pprint(self.filter_metadata)
+                print("\nStandard Filter Summary (Measurements per Element per Standard):")
+                display(self.filter_summary_df)
+                print("\nCalibration Summary:")
+                display(self.calibration_df)
+
+        except Exception as e:
+            with self.calibration_visualize_output:
+                clear_output()
+                print(f"Error visualizing calibration: {e}")
+
+    def apply_calibration(self, b):
+        """Apply the loaded calibration to the loaded measurements.
+        """
+        if not hasattr(self, 'calibration_df'):
+            with self.calibration_apply_output:
+                clear_output()
+                print("No calibration loaded.")
+            return
+        if not hasattr(self, 'measurements_df'):
+            with self.calibration_apply_output:
+                clear_output()
+                print("No measurements loaded.")
+            return
+        try:
+            # find elements in measurements_df that are in calibration_df
+            elements_to_calibrate = [col for col in self.measurements_df.columns if col in self.calibration_df.index]
+            if not elements_to_calibrate:
+                with self.calibration_apply_output:
+                    clear_output()
+                    print("No matching elements found between measurements and calibration.")
+                return
+
+            # create new dataframe for calibrated measurements, with multiindex columns on elements with mean, uncertainty, and prediction uncertainty
+            self.calibrated_measurements_df = pd.DataFrame(
+                columns=pd.MultiIndex.from_product(
+                    [elements_to_calibrate, ['mean', 'std, measured', 'std, propagated (cal)', 'std, propagated (pred)']]
+                ),
+                dtype=float
+            )
+            # Add required columns from validate_niton_measurements as single-level columns
+            required_columns = ['Reading No', 'Reading Type', 'Time', 'Sample Depth']
+            for col in required_columns:
+                self.calibrated_measurements_df[col] = self.measurements_df[col].values
+            
+            # apply calibration for each element
+            for el in elements_to_calibrate:
+                print(el)
+                # Ensure values are numeric
+                cur_el_meas = self.measurements_df[el].astype(float)
+                cur_el_stds = self.measurements_df[quantity_column_map[el]['uncertainty']].astype(float) / 2
+                slope = self.calibration_df.at[el, 'slope']
+
+                # apply calibration using tuple-based column assignment for MultiIndex
+                self.calibrated_measurements_df.loc[:, (el, 'mean')] = cur_el_meas * slope
+                
+                # handle uncertainties
+
+                # measurement uncertainty (no processing)
+                self.calibrated_measurements_df.loc[:, (el, 'std, measured')] = cur_el_stds
+                # propagated uncertainty from calibration (slope uncertainty only)
+                self.calibrated_measurements_df.loc[:, (el, 'std, propagated (cal)')] = \
+                    np.sqrt(cur_el_meas**2 * self.calibration_df.at[el, 'slope_unc']**2 + \
+                            slope**2 * cur_el_stds**2 )
+                # propagated uncertainty from calibration including prediction uncertainty
+                self.calibrated_measurements_df.loc[:, (el, 'std, propagated (pred)')] = \
+                    np.sqrt(cur_el_meas**2 * self.calibration_df.at[el, 'slope_unc']**2 + \
+                            slope**2 * cur_el_stds**2 + \
+                            self.calibration_df.at[el, 'y_MSE'])
+
+            with self.calibration_apply_output:
+                clear_output()
+                print(f"Applied calibration to {len(self.calibrated_measurements_df)} measurements.")
+                display(self.calibrated_measurements_df.head())
+        except Exception as e:
+            with self.calibration_apply_output:
+                clear_output()
+                print(f"Error applying calibration: {e}")
+
+    def save_calibrated_file(self, b):
+        """Save the calibrated measurements to a file.
+
+        Parameters
+        ----------
+        b : Button
+            The button that was clicked.
+
+        Returns
+        -------
+        None
+            This function does not return a value.
+
+        Raises
+        ------
+        ValueError
+            If the calibrated measurements DataFrame is not available.
+        """
+        if not hasattr(self, 'calibrated_measurements_df'):
+            with self.calibration_save_output:
+                clear_output()
+                print("No calibrated measurements available.")
+            return
+        try:
+            # Save the calibrated measurements to a file in same directory as the input measurements file
+            save_path = Path(self.measurements_file_chooser.selected).parent / self.calibrated_file_name.value
+            self.calibrated_measurements_df.to_csv(save_path, index=False)
+            with self.save_calibrated_file_output:
+                clear_output()
+                print("Calibrated measurements saved successfully.")
+        except Exception as e:
+            with self.save_calibrated_file_output:
+                clear_output()
+                print(f"Error saving calibrated measurements: {e}")
 
 
 class CalibrationEditorUI:
@@ -1300,9 +1630,9 @@ class CalibrationEditorUI:
                 cur_x = np.linspace(0, 1.1 * self.standard_element_df.xs(el, level=1)['max'].max(), 100)
                 cur_y = self.calibration_df.loc[el]['slope'] * cur_x
                 pred_int = prediction_interval(
-                    dfdp=[cur_x], # derivative with respect to slope only
-                    pcov=self.calibration_df.loc[el]['cov_matrix'],
-                    yerr=self.calibration_df.loc[el]['y_err_max'],
+                    [cur_x], # derivative with respect to slope only
+                    self.calibration_df.loc[el]['cov_matrix'],
+                    self.calibration_df.loc[el]['y_MSE'],
                     signif=[68, 95]
                 )
                 ax[ii].plot(cur_x, cur_y, color='k', label='Calibration fit')
@@ -1404,7 +1734,7 @@ class CalibrationEditorUI:
                 # extract slope and its standard error
                 slope = odr_output.beta[0]
                 slope_unc = odr_output.sd_beta[0]
-                y_err_max = np.max(np.abs(odr_output.eps))
+                y_MSE = np.sum((cur_el_know_means - linear_func(odr_output.beta, cur_el_meas_means))**2) / (len(cur_el_meas_means) - 1)
 
                 # reduced variance 95% limit (chi2 level for given dof at 95% confidence level)
                 dof = len(cur_el_meas_means)-1
@@ -1414,7 +1744,7 @@ class CalibrationEditorUI:
                 calibration_dicts.append({'element': el,
                                            'slope': slope,
                                            'slope_unc': slope_unc,
-                                           'y_err_max': y_err_max,
+                                           'y_MSE': y_MSE,
                                            'reduced variance': odr_output.res_var,
                                            'reduced variance 95%': red_var_95,
                                            'cov_matrix': odr_output.cov_beta,
@@ -1515,7 +1845,7 @@ class CalibrationEditorUI:
                 print(f"Error saving calibration: {e}")
 
 
-def prediction_interval(dfdp, pcov, yerr, signif=95):
+def prediction_interval(dfdp, pcov, yMSE, signif=95):
     """Prediction interval for ODR fits.
 
     Taken from https://stackoverflow.com/questions/60889680/how-to-plot-1-sigma-prediction-interval-for-scipy-odr
@@ -1527,8 +1857,8 @@ def prediction_interval(dfdp, pcov, yerr, signif=95):
         Each element of the list/array corresponds to one parameter and contains an array of derivatives at each x value.
     pcov : 2D array-like
         Covariance matrix of the fit parameters (ODR_output.cov_beta).
-    yerr : float or array-like
-        Maximum y error of the data points (np.max(ODR_output.eps)).
+    yMSE : float or array-like
+        Mean squared error of the data points in y-coordinate.
     signif : float or array-like, optional
         Significance level (e.g., 95 for 95% prediction interval), by default 95.
         If array-like, then output is calculated for each significance level.
@@ -1555,7 +1885,7 @@ def prediction_interval(dfdp, pcov, yerr, signif=95):
             d += dfdp[j] * dfdp[k] * pcov[j,k]
 
     # return prediction band offset for a new measurement
-    return np.squeeze(tval.reshape(-1, 1) * np.sqrt(yerr**2 + d))
+    return np.squeeze(tval.reshape(-1, 1) * np.sqrt(yMSE + d))
 
 # define linear function with intercept fixed at 0
 def linear_func(B, x):
